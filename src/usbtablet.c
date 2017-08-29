@@ -62,10 +62,10 @@
 
 #define xcalloc calloc
 #define xalloc malloc
-#define Xcalloc calloc
-#define Xalloc malloc
-#define Xfree free
-#define Xrealloc realloc
+#define xcalloc calloc
+#define xalloc malloc
+#define xfree free
+#define xrealloc realloc
 #endif
 
 #define SYSCALL(call) while(((call) == -1) && (errno == EINTR))
