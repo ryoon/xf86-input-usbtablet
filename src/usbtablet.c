@@ -32,7 +32,7 @@
  *   Wacom Graphire ET-0405-U
  *   Wacom Graphire2 ET-0405A-U
  *   Wacom Intuos2 A4 XD-0912-U
- *   Wacom Intuos Art CTH-690/K0 (not yet)
+ *   Wacom Intuos Art CTH-690/K0
  * Does not work for:
  *   Wacom Graphire3 4x5 (do not overwrite its report descriptor)
  *   Wacom Graphire3 6x8 (do not overwrite its report descriptor)
@@ -403,6 +403,25 @@ UsbTabletReadInput(InputInfoPtr pInfo)
 					ds.yTilt = 1;
 				break;
 			case 0x033e: /* Intuos Art CTH-690/K0 */
+				ds.x = hidData[1] << 9;
+				ds.x |= hidData[2] << 1;
+				ds.x |= (hidData[8] >> 1) & 0x01;
+				ds.y = hidData[3] << 9;
+				ds.y |= hidData[4] << 1;
+				ds.y |= hidData[8] & 0x01;
+				invert = 0;
+				ds.distance = hidData[8] >> 2;
+				if (ds.distance > 50)
+					ds.proximity = 1;
+				else
+					ds.proximity = 0;
+				ds.buttons = hidData[0] & 0x07;
+				ds.pressure = hidData[5] << 3;
+				ds.pressure |= (hidData[6] & 0xc0) >> 5;
+				ds.pressure |= hidData[0] & 0x01;
+				ds.proximity = 1;
+				ds.xTilt = -1;
+				ds.yTilt = -1;
 				break;
 			default:
 				return;
@@ -690,6 +709,15 @@ UsbTabletOpen(InputInfoPtr pInfo)
 			comm->nAxes = 5;
 			break;
 		case 0x033e: /* Intuos Art CTH-690/K0 */
+			comm->xMin = 0;
+			comm->xMax = 21600;
+			comm->yMin = 0;
+			comm->yMax = 13500;
+			comm->tipPressureMin = 0;
+			comm->tipPressureMax = 2047;
+			comm->distanceMin = 0;
+			comm->distanceMax = 63;
+			comm->nAxes = 3;
 			break;
 		default:
 			return !Success;
