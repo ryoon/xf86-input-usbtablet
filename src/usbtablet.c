@@ -29,8 +29,14 @@
 /*
  * Driver for USB HID tablet devices.
  * Works for:
- *   Wacom PenPartner
- *   Wacom Graphire
+ *   Wacom Graphire ET-0405-U
+ *   Wacom Graphire2 ET-0405A-U
+ *   Wacom Intuos2 A4 XD-0912-U (not yet)
+ *   Wacom Intuos Art CTH-690/K0 (not yet)
+ * Does not work for:
+ *   Wacom Graphire3 4x5 (do not overwrite its report descriptor)
+ *   Wacom Graphire3 6x8 (do not overwrite its report descriptor)
+ *   Wacom Graphire4 4x5 (do not overwrite its report descriptor)
  */
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -83,6 +89,8 @@
 #define NBUTTONS 4
 #define NAXES 5	/* X, Y, Pressure, Tilt-X, Tilt-Y */
 
+#define NPKT 10 /* for Intuos2 and Intuos Art */
+
 typedef struct USBTDevice USBTDevice, *USBTDevicePtr;
 
 typedef struct {
@@ -91,18 +99,24 @@ typedef struct {
 	InputInfoPtr	*devices;
 	double		factorX;
 	double		factorY;
-	hid_item_t	hidX;
-	hid_item_t	hidY;
-	hid_item_t	hidTiltX;
-	hid_item_t	hidTiltY;
-	hid_item_t	hidIn_Range;
-	hid_item_t	hidTip_Pressure;
-	hid_item_t	hidBarrel_Switch[NBUTTONS];
-	hid_item_t	hidInvert;
+	hid_item_t	hidData[NPKT];
 	int		reportSize;
 	int		reportId;
 	int		nSwitch;
+	int xMin;
+	int xMax;
+	int yMin;
+	int yMax;
+	int tipPressureMin;
+	int tipPressureMax;
+	int tiltXMin;
+	int tiltXMax;
+	int tiltYMin;
+	int tiltYMax;
 	USBTDevicePtr	currentProxDev;
+	uint16_t idVendor;
+	uint16_t idProduct;
+	int nAxes;
 } USBTCommon, *USBTCommonPtr;
 
 typedef struct {
@@ -135,10 +149,10 @@ static int UsbTabletProc(DeviceIntPtr, int);
 static void UsbTabletReadInput(InputInfoPtr);
 static void UsbTabletClose(InputInfoPtr);
 static int UsbTabletOpenDevice(DeviceIntPtr);
-static void UsbTabletSendEvents(InputInfoPtr, int, USBTState *);
+static void UsbTabletSendEvents(InputInfoPtr, int, USBTState *, int);
 static void UsbTabletSendButtons(InputInfoPtr, int, int, int, int, int, int);
-static void UsbTabletOutOfProx(USBTDevicePtr prx);
-static void UsbTabletIntoProx(USBTDevicePtr prx, USBTState *ds);
+static void UsbTabletOutOfProx(USBTDevicePtr prx, int);
+static void UsbTabletIntoProx(USBTDevicePtr prx, USBTState *ds, int);
 
 static XF86ModuleVersionInfo VersionRec = {
 	"usbtablet",
@@ -323,6 +337,7 @@ UsbTabletReadInput(InputInfoPtr pInfo)
 	int		invert, len, i;
 	unsigned char	buffer[200], *p;
 	USBTState	ds;
+	uint8_t hidData[NPKT];
 
 	DBG(7, ErrorF("UsbTabletReadInput BEGIN device=%s fd=%d\n",
 		      comm->devName, pInfo->fd));
@@ -337,35 +352,54 @@ UsbTabletReadInput(InputInfoPtr pInfo)
 
 		if (len <= 0) {
 			if (errno != EAGAIN) {
-				Error("error reading USBT device");
+				ErrorF("error reading USBT device");
 			}
 			break;
 		}
 
-		ds.x = hid_get_data(p, &comm->hidX);
-		ds.y = hid_get_data(p, &comm->hidY);
-		ds.buttons = 0;
-		for (i = 0; i < comm->nSwitch; i++) {
-			if (hid_get_data(p, &comm->hidBarrel_Switch[i])) {
-				ds.buttons |= (1 << (i+1));
-			}
+		for (i = 0; i < NPKT; i++) {
+			hidData[i] = hid_get_data(p, &comm->hidData[i]) & 0xff;
 		}
-		invert = hid_get_data(p, &comm->hidInvert);
-		ds.pressure = hid_get_data(p, &comm->hidTip_Pressure);
+
+		if (comm->idVendor == 0x056a) {
+		/* Wacom */
+			switch (comm->idProduct) {
+			case 0x0010: /* Graphire ET-0405-U */
+			case 0x0011: /* Graphire2 ET-0405A-U */
+				ds.x = hidData[2] << 8;
+				ds.x |= hidData[1];
+				ds.y = hidData[4] << 8;
+				ds.y |= hidData[3];
+				ds.buttons = hidData[0] & 0x07;
+				invert = (hidData[0] >> 5) & 0x01;
+				ds.pressure = hidData[5];
+				ds.proximity = (hidData[0] >> 7) & 0x01;
+				ds.xTilt = -1;
+				ds.yTilt = -1;
+				break;
+			case 0x0043: /* Intuos2 A4 XD-0912-U */
+				break;
+			case 0x033e: /* Intuos Art CTH-690/K0 */
+				break;
+			default:
+				return;
+			}
+		} else {
+			return;
+		}
+
 		if (ds.pressure > priv->threshold)
 			ds.buttons |= 1;
-		ds.proximity = hid_get_data(p, &comm->hidIn_Range);
-		ds.xTilt = hid_get_data(p, &comm->hidTiltX);
-		ds.yTilt = hid_get_data(p, &comm->hidTiltY);
 
 		if (!ds.proximity)
-			UsbTabletOutOfProx(comm->currentProxDev);
+			UsbTabletOutOfProx(comm->currentProxDev, comm->nAxes);
 
 		for (i = 0; i < comm->nDevs; i++) {
 			DBG(7, ErrorF("UsbTabletReadInput sending to %s\n",
 				      comm->devices[i]->name));
 
-			UsbTabletSendEvents(comm->devices[i], invert, &ds);
+			UsbTabletSendEvents(comm->devices[i], invert, &ds,
+				comm->nAxes);
 		}
 	}
 	DBG(7, ErrorF("UsbTabletReadInput END   pInfo=%p priv=%p\n",
@@ -373,7 +407,7 @@ UsbTabletReadInput(InputInfoPtr pInfo)
 }
 
 static void
-UsbTabletOutOfProx(USBTDevicePtr prx)
+UsbTabletOutOfProx(USBTDevicePtr prx, int nAxes)
 {
 	USBTState *ods;
 
@@ -394,26 +428,47 @@ UsbTabletOutOfProx(USBTDevicePtr prx)
 		prx->state.buttons = 0;
 	}
 	DBG(1, ErrorF("xf86USBTSendEvents: out proximity\n"));
-	xf86PostProximityEvent(prx->info->dev, 0, 0, 5,
-			       ods->x, ods->y, ods->pressure,
-			       ods->xTilt, ods->yTilt);
+	switch (nAxes) {
+	case 3:
+		xf86PostProximityEvent(prx->info->dev, 0, 0, 3,
+				       ods->x, ods->y, ods->pressure);
+		break;
+	case 5:
+		xf86PostProximityEvent(prx->info->dev, 0, 0, 5,
+				       ods->x, ods->y, ods->pressure,
+				       ods->xTilt, ods->yTilt);
+		break;
+	default:
+		ErrorF("Invalid axes\n");
+		break;
+	}
 }
 
 static void
-UsbTabletIntoProx(USBTDevicePtr prx, USBTState *ds)
+UsbTabletIntoProx(USBTDevicePtr prx, USBTState *ds, int nAxes)
 {
 	if (prx->comm->currentProxDev == prx)
 		return;
-	UsbTabletOutOfProx(prx->comm->currentProxDev);
+	UsbTabletOutOfProx(prx->comm->currentProxDev, nAxes);
 	prx->comm->currentProxDev = prx;
 
 	DBG(1, ErrorF("Into proximity %s\n", prx->info->name));
 
 	DBG(1, ErrorF("xf86USBTSendEvents: in proximity\n"));
-	xf86PostProximityEvent(prx->info->dev, 1, 0, 5,
-			       ds->x, ds->y, ds->pressure,
-			       ds->xTilt, ds->yTilt);
-
+	switch (nAxes) {
+	case 3:
+		xf86PostProximityEvent(prx->info->dev, 1, 0, 3,
+				       ds->x, ds->y, ds->pressure);
+		break;
+	case 5:
+		xf86PostProximityEvent(prx->info->dev, 1, 0, 5,
+				       ds->x, ds->y, ds->pressure,
+				       ds->xTilt, ds->yTilt);
+		break;
+	default:
+		ErrorF("Invalid axes\n");
+		break;
+	}
 }
 
 static void
@@ -439,7 +494,7 @@ UsbTabletSendButtons(InputInfoPtr pInfo, int buttons,
 }
 
 static void
-UsbTabletSendEvents(InputInfoPtr pInfo, int invert, USBTState *ds)
+UsbTabletSendEvents(InputInfoPtr pInfo, int invert, USBTState *ds, int nAxes)
 {
 	USBTDevicePtr	priv = (USBTDevicePtr)pInfo->private;
 	USBTCommonPtr	comm = priv->comm;
@@ -459,7 +514,7 @@ UsbTabletSendEvents(InputInfoPtr pInfo, int invert, USBTState *ds)
 	if (((priv->flags & ERASER_ID) != 0) != invert)
 		return;
 
-	UsbTabletIntoProx(priv, ds);
+	UsbTabletIntoProx(priv, ds, nAxes);
 
 	if (ds->buttons == ods->buttons && ds->proximity == ods->proximity &&
 	    ABS(ds->x - ods->x) < priv->suppress &&
@@ -476,17 +531,27 @@ UsbTabletSendEvents(InputInfoPtr pInfo, int invert, USBTState *ds)
 	rz = ds->pressure;
 	rtx = ds->xTilt; rty = ds->yTilt;
 
+ErrorF("rx=%d, ry=%d\n", rx, ry);
+
 	if (rx != ods->x || ry != ods->y || rz != ods->pressure ||
 	    rtx != ods->xTilt || rty != ods->yTilt) {
 		DBG(9, ErrorF("UsbTabletSendEvents: motion\n"));
-		xf86PostMotionEvent(pInfo->dev, is_abs, 0, 5,
-				    rx, ry, rz, rtx, rty);
-
+		switch (nAxes) {
+		case 3:
+			xf86PostMotionEvent(pInfo->dev, is_abs, 0, nAxes,
+				rx, ry, rz);
+			break;
+		case 5:
+			xf86PostMotionEvent(pInfo->dev, is_abs, 0, nAxes,
+				rx, ry, rz, rtx, rty);
+			break;
+		default:
+			break;
+		}
 	}
 	if (ds->buttons != ods->buttons)
 		UsbTabletSendButtons(pInfo, ds->buttons,
 				   rx, ry, rz, rtx, rty);
-
 	*ods = *ds;
 }
 
@@ -518,8 +583,8 @@ UsbTabletOpen(InputInfoPtr pInfo)
 	hid_data_t     d;
 	hid_item_t     h;
 	report_desc_t rd;
-	int nSwitch = 0;
 	int            i, r;
+	struct usb_device_info di;
 
 	DBG(1, ErrorF("opening %s\n", comm->devName));
 
@@ -531,7 +596,7 @@ UsbTabletOpen(InputInfoPtr pInfo)
 	    }
 	}
 	if (pInfo->fd != -1) {
-	    DBG(1, ErrorF("UsbTabletOpen: shared device already open %x\n",
+	    DBG(1, ErrorF("UsbTabletOpen: shared device already open %d\n",
 			  (unsigned int)pInfo->fd));
 	    return Success;
 	}
@@ -542,6 +607,12 @@ UsbTabletOpen(InputInfoPtr pInfo)
 			comm->devName, strerror(errno));
 		return !Success;
 	}
+        SYSCALL(r = ioctl(pInfo->fd, USB_GET_DEVICEINFO, &di));
+	if (r == -1)
+		return !Success;
+        comm->idVendor = di.udi_vendorNo;
+        comm->idProduct = di.udi_productNo;
+
 	SYSCALL(r = ioctl(pInfo->fd, USB_GET_REPORT_ID, &comm->reportId));
 	if (r == -1) {
 		ErrorF("Error ioctl USB_GET_REPORT_ID on %s : %s\n",
@@ -553,87 +624,63 @@ UsbTabletOpen(InputInfoPtr pInfo)
 
 	rd = hid_get_report_desc(pInfo->fd);
 	if (rd == 0) {
-		Error(comm->devName);
+		ErrorF(comm->devName);
 		SYSCALL(close(pInfo->fd));
 		return !Success;
 	}
 
-	memset(&comm->hidX, 0, sizeof (hid_item_t));
-	memset(&comm->hidY, 0, sizeof (hid_item_t));
-	memset(&comm->hidTiltX, 0, sizeof (hid_item_t));
-	memset(&comm->hidTiltY, 0, sizeof (hid_item_t));
-	memset(&comm->hidIn_Range, 0, sizeof (hid_item_t));
-	memset(&comm->hidInvert, 0, sizeof (hid_item_t));
-	memset(&comm->hidTip_Pressure, 0, sizeof (hid_item_t));
-	for (i = 0; i < NBUTTONS; i++) {
-		memset(&comm->hidBarrel_Switch[i], 0, sizeof (hid_item_t));
+	for (i = 0; i < NPKT; i++) {
+		memset(&comm->hidData[i], 0, sizeof (hid_item_t));
 	}
+	i = 0;
 	for (d = hid_start_parse(rd, 1<<hid_input, comm->reportId);
 	     hid_get_item(d, &h); ) {
 		if (h.kind != hid_input || (h.flags & HIO_CONST))
 			continue;
-		if (h.usage == HID_USAGE2(HUP_GENERIC_DESKTOP, HUG_X))
-			comm->hidX = h;
-		if (h.usage == HID_USAGE2(HUP_GENERIC_DESKTOP, HUG_Y))
-			comm->hidY = h;
-		if (h.usage == HID_USAGE2(HUP_GENERIC_DESKTOP, HUD_X_TILT))
-			comm->hidTiltX = h;
-		if (h.usage == HID_USAGE2(HUP_GENERIC_DESKTOP, HUD_Y_TILT))
-			comm->hidTiltY = h;
-		if (h.usage == HID_USAGE2(HUP_DIGITIZERS, HUD_INVERT))
-			comm->hidInvert = h;
-		if (h.usage == HID_USAGE2(HUP_DIGITIZERS, HUD_IN_RANGE))
-			comm->hidIn_Range = h;
-		if (h.usage == HID_USAGE2(HUP_DIGITIZERS, HUD_TIP_PRESSURE))
-			comm->hidTip_Pressure = h;
-		if (h.usage == HID_USAGE2(HUP_DIGITIZERS, HUD_BARREL_SWITCH))
-			comm->hidBarrel_Switch[nSwitch++] = h;
+		comm->hidData[i] = h;
+		i++;
 	}
 	hid_end_parse(d);
-	comm->nSwitch = nSwitch;
 	comm->reportSize = hid_report_size(rd, hid_input, comm->reportId);
 	hid_dispose_report_desc(rd);
-	if (comm->hidX.report_size == 0 ||
-	    comm->hidY.report_size == 0 ||
-	    comm->hidIn_Range.report_size == 0) {
-		xf86Msg(X_ERROR, "%s has no X, Y, or In_Range report\n",
-			comm->devName);
+
+	if (comm->idVendor == 0x056a) {
+	/* Wacom */
+		switch (comm->idProduct) {
+		case 0x0010: /* Graphire ET-0405-U */
+		case 0x0011: /* Graphire2 ET-0405A-U */
+			comm->xMin = 0;
+			comm->xMax = 10206;
+			comm->yMin = 0;
+			comm->yMax = 7422;
+			comm->tipPressureMin = 0;
+			comm->tipPressureMax = 511;
+			comm->nAxes = 3;
+			break;
+		case 0x0043: /* Intuos2 A4 XD-0912-U */
+			break;
+		case 0x033e: /* Intuos Art CTH-690/K0 */
+			break;
+		default:
+			return !Success;
+		}
+	} else {
 		return !Success;
 	}
-	DBG(2, ErrorF("Found X at %d, size=%d\n",
-		      comm->hidX.pos, comm->hidX.report_size));
-	DBG(2, ErrorF("Found Y at %d, size=%d\n",
-		      comm->hidY.pos, comm->hidY.report_size));
-	DBG(2, ErrorF("Found Invert at %d, size=%d\n",
-		      comm->hidInvert.pos, comm->hidInvert.report_size));
-	DBG(2, ErrorF("Found In_Range at %d, size=%d\n",
-		      comm->hidIn_Range.pos, comm->hidIn_Range.report_size));
-	DBG(2, ErrorF("Found Tip_Pressure at %d, size=%d\n",
-		      comm->hidTip_Pressure.pos,
-		      comm->hidTip_Pressure.report_size));
-	for (i = 0; i < comm->nSwitch; i++) {
-		DBG(2, ErrorF("Found Barrel_Switch at %d, size=%d\n",
-			      comm->hidBarrel_Switch[i].pos,
-			      comm->hidBarrel_Switch[i].report_size));
-	}
-	DBG(2, ErrorF("Report size=%d, report id=%d\n",
-		      comm->reportSize, comm->reportId));
-
 	comm->factorX = ((double) screenInfo.screens[0]->width)
-		/ (comm->hidX.logical_maximum - comm->hidX.logical_minimum);
+		/ (comm->xMax - comm->xMin);
 	comm->factorY = ((double) screenInfo.screens[0]->height)
-		/ (comm->hidY.logical_maximum - comm->hidY.logical_minimum);
+		/ (comm->yMax - comm->yMin);
 
-	xf86Msg(X_PROBED, "USBT tablet X=%d..%d, Y=%d..%d",
-		    comm->hidX.logical_minimum,
-		    comm->hidX.logical_maximum,
-		    comm->hidY.logical_minimum,
-		    comm->hidY.logical_maximum);
-	if (comm->hidTip_Pressure.report_size != 0)
-		xf86Msg(X_NONE, ", pressure=%d..%d",
-			    comm->hidTip_Pressure.logical_minimum,
-			    comm->hidTip_Pressure.logical_maximum);
-	xf86Msg(X_NONE, "\n");
+	xf86Msg(X_PROBED, "USBT tablet X=%d..%d, Y=%d..%d\n",
+		    comm->xMin,
+		    comm->xMax,
+		    comm->yMin,
+		    comm->yMax);
+	if (comm->tipPressureMin == -1 && comm->tipPressureMax == -1)
+		xf86Msg(X_PROBED, "pressure=%d..%d\n",
+			    comm->tipPressureMin,
+			    comm->tipPressureMax);
 
 	return Success;
 }
@@ -648,8 +695,6 @@ UsbTabletOpenDevice(DeviceIntPtr pUSBT)
 #if GET_ABI_MAJOR(ABI_XINPUT_VERSION) >= 7
 	Atom axes_labels[NAXES] = {0};
 #endif
-	hid_item_t	*h = &comm->hidTip_Pressure;
-
 	DBG(1, ErrorF("UsbTabletOpenDevice start\n"));
 	if (pInfo->fd < 0) {
 		DBG(2, ErrorF("UsbTabletOpenDevice really open\n"));
@@ -667,9 +712,10 @@ UsbTabletOpenDevice(DeviceIntPtr pUSBT)
 	}
 
 	priv->threshold =
-	    h->logical_minimum +
-	    (h->logical_maximum - h->logical_minimum) * priv->thresCent / 100;
-	if (h->report_size != 0)
+	    comm->tipPressureMin +
+	    (comm->tipPressureMax - comm->tipPressureMin) * priv->thresCent /
+	    100;
+	if (comm->tipPressureMin == -1 && comm->tipPressureMax == -1)
 		xf86Msg(X_PROBED,
 			"USBT %s pressure threshold=%d, suppress=%d\n",
 			pInfo->name, priv->threshold, priv->suppress);
@@ -682,8 +728,8 @@ UsbTabletOpenDevice(DeviceIntPtr pUSBT)
 #if GET_ABI_MAJOR(ABI_XINPUT_VERSION) >= 7
 			       axes_labels[0],
 #endif
-			       comm->hidX.logical_minimum * comm->factorX, /* min val */
-			       comm->hidX.logical_maximum * comm->factorX, /* max val */
+			       comm->xMin * comm->factorX, /* min val */
+			       comm->xMax * comm->factorX, /* max val */
 			       mils(1000), /* resolution */
 			       0, /* min_res */
 			       mils(1000) /* max_res */
@@ -696,8 +742,8 @@ UsbTabletOpenDevice(DeviceIntPtr pUSBT)
 #if GET_ABI_MAJOR(ABI_XINPUT_VERSION) >= 7
 			       axes_labels[1],
 #endif
-			       comm->hidY.logical_minimum * comm->factorY, /* min val */
-			       comm->hidY.logical_maximum * comm->factorY, /* max val */
+			       comm->yMin * comm->factorY, /* min val */
+			       comm->yMax * comm->factorY, /* max val */
 			       mils(1000), /* resolution */
 			       0, /* min_res */
 			       mils(1000) /* max_res */
@@ -710,8 +756,8 @@ UsbTabletOpenDevice(DeviceIntPtr pUSBT)
 #if GET_ABI_MAJOR(ABI_XINPUT_VERSION) >= 7
 			       axes_labels[2],
 #endif
-			       h->logical_minimum, /* min val */
-			       h->logical_maximum, /* max val */
+			       comm->tipPressureMin, /* min val */
+			       comm->tipPressureMax, /* max val */
 			       mils(1000), /* resolution */
 			       0, /* min_res */
 			       mils(1000) /* max_res */
@@ -724,8 +770,8 @@ UsbTabletOpenDevice(DeviceIntPtr pUSBT)
 #if GET_ABI_MAJOR(ABI_XINPUT_VERSION) >= 7
 			       axes_labels[3],
 #endif
-			       comm->hidTiltX.logical_minimum, /* min val */
-			       comm->hidTiltX.logical_maximum, /* max val */
+			       comm->tiltXMin, /* min val */
+			       comm->tiltXMax, /* max val */
 			       mils(1000), /* resolution */
 			       0, /* min_res */
 			       mils(1000) /* max_res */
@@ -738,8 +784,8 @@ UsbTabletOpenDevice(DeviceIntPtr pUSBT)
 #if GET_ABI_MAJOR(ABI_XINPUT_VERSION) >= 7
 			       axes_labels[4],
 #endif
-			       comm->hidTiltY.logical_minimum, /* min val */
-			       comm->hidTiltY.logical_maximum, /* max val */
+			       comm->tiltYMin, /* min val */
+			       comm->tiltYMax, /* max val */
 			       mils(1000), /* resolution */
 			       0, /* min_res */
 			       mils(1000) /* max_res */
