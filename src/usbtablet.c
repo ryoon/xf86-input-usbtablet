@@ -31,7 +31,7 @@
  * Works for:
  *   Wacom Graphire ET-0405-U
  *   Wacom Graphire2 ET-0405A-U
- *   Wacom Intuos2 A4 XD-0912-U (not yet)
+ *   Wacom Intuos2 A4 XD-0912-U
  *   Wacom Intuos Art CTH-690/K0 (not yet)
  * Does not work for:
  *   Wacom Graphire3 4x5 (do not overwrite its report descriptor)
