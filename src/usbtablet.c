@@ -109,6 +109,8 @@ typedef struct {
 	int yMax;
 	int tipPressureMin;
 	int tipPressureMax;
+	int distanceMin;
+	int distanceMax;
 	int tiltXMin;
 	int tiltXMax;
 	int tiltYMin;
@@ -120,7 +122,7 @@ typedef struct {
 } USBTCommon, *USBTCommonPtr;
 
 typedef struct {
-	int	x, y, pressure, buttons, xTilt, yTilt, proximity;
+	int	x, y, distance, pressure, buttons, xTilt, yTilt, proximity;
 } USBTState;
 
 struct USBTDevice {
@@ -378,6 +380,27 @@ UsbTabletReadInput(InputInfoPtr pInfo)
 				ds.yTilt = -1;
 				break;
 			case 0x0043: /* Intuos2 A4 XD-0912-U */
+				ds.x = hidData[1] << 8;
+				ds.x |= hidData[2];
+				ds.y = hidData[3] << 8;
+				ds.y |= hidData[4];
+				ds.distance = hidData[8] >> 3;
+				if (ds.distance < 20)
+					ds.proximity = 1;
+				else
+					ds.proximity = 0;
+				ds.buttons = hidData[0] & 0x07;
+				invert = (hidData[0] >> 5) & 0x01;
+				ds.pressure = hidData[5] << 2;
+				ds.pressure |= (hidData[6] & 0xc0) >> 6;
+				ds.xTilt = (hidData[6] << 1) & 0x7f;
+				ds.xTilt |= hidData[7] >> 7;
+				ds.xTilt -= 64;
+				if (ds.xTilt == 0)
+					ds.xTilt = 1;
+				ds.yTilt = (hidData[7] & 0x7f) - 64;
+				if (ds.yTilt == 0)
+					ds.yTilt = 1;
 				break;
 			case 0x033e: /* Intuos Art CTH-690/K0 */
 				break;
@@ -531,8 +554,6 @@ UsbTabletSendEvents(InputInfoPtr pInfo, int invert, USBTState *ds, int nAxes)
 	rz = ds->pressure;
 	rtx = ds->xTilt; rty = ds->yTilt;
 
-ErrorF("rx=%d, ry=%d\n", rx, ry);
-
 	if (rx != ods->x || ry != ods->y || rz != ods->pressure ||
 	    rtx != ods->xTilt || rty != ods->yTilt) {
 		DBG(9, ErrorF("UsbTabletSendEvents: motion\n"));
@@ -658,6 +679,15 @@ UsbTabletOpen(InputInfoPtr pInfo)
 			comm->nAxes = 3;
 			break;
 		case 0x0043: /* Intuos2 A4 XD-0912-U */
+			comm->xMin = 0;
+			comm->xMax = 30480;
+			comm->yMin = 0;
+			comm->yMax = 24060;
+			comm->tipPressureMin = 0;
+			comm->tipPressureMax = 1023;
+			comm->distanceMin = 0;
+			comm->distanceMax = 31;
+			comm->nAxes = 5;
 			break;
 		case 0x033e: /* Intuos Art CTH-690/K0 */
 			break;
