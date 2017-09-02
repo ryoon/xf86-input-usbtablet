@@ -63,7 +63,7 @@ Section "InputDevice"
 #       Option "DebugLevel" "99"
 EndSection
 ```
-If you have not /dev/uhid6, please run the following:
+If you do not have /dev/uhid6, please run the following:
 ```
 # cd /dev
 # ./MAKEDEV uhid6
