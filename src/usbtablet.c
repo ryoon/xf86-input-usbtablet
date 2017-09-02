@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 1999 Lennart Augustsson <augustss@netbsd.org>
+ * Copyright (c) 2017 Ryo ONODERA <ryo@tetera.org>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
