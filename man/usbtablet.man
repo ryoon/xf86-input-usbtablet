@@ -1,6 +1,7 @@
 .\" $OpenBSD: usbtablet.man,v 1.2 2010/08/03 21:22:32 matthieu Exp $
 .\"
 .\" Copyright (c) 1999-2004 Matthieu Herrb and Lennart Augustsson
+.\" Copyright (c) 2017 Ryo ONODERA <ryo@tetera.org>
 .\"
 .\" Redistribution and use in source and binary forms, with or without
 .\" modification, are permitted provided that the following conditions
@@ -40,15 +41,23 @@ usbtablet \- USB tablet input driver for *BSD
 .fi
 .SH DESCRIPTION
 .B usbtablet
-is an XFree86 input driver for USB tablet devices.
+is an X.org input driver for USB tablet devices.
 .PP
 The
 .B usbtablet
 driver functions as a pointer input device, and may be used as the
 X server's core pointer.
 .SH SUPPORTED HARDWARE
-This driver supports most USB tablets like the Wacom Graphire or
-PenPartner tablets.
+This driver supports some USB tablets as follows.
+Only pen input is supported. There are no finger touch and mouse.
+.HP
+Wacom Graphire (ET-0405-U)
+.HP
+Wacom Graphire2 (ET-0405A-U)
+.HP
+Wacom Intuos2 A4 (XD-0912-U)
+.HP
+Wacom Intuos Art (CTH-690/K0)
 .SH CONFIGURATION DETAILS
 Please refer to xorg.conf(__filemansuffix__) for general configuration
 details and for options that can be used with all input drivers.  This
@@ -100,5 +109,5 @@ Xorg(1), xorg.conf(__filemansuffix__), Xserver(1), X(__miscmansuffix__).
 .SH AUTHORS
 Lennart Augustsson <augustss@netbsd.org> wrote the original version
 for XFree86 3.3.6, Matthieu Herrb <matthieu@openbsd.org> adapted it to
-XFree86 4.x.
+XFree86 4.x. Ryo ONODERA <ryo@tetera.org> adapted it to some devices.
 
