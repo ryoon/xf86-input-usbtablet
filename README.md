@@ -1,7 +1,6 @@
 # xf86-input-usbtablet for NetBSD-curent
 
 ## Tested USB pen tablets
-
 ### Wacom
 * Graphire ET-0405-U (pen, no mouse)
 * Graphire2 ET-0405A-U (pen, no mouse)
