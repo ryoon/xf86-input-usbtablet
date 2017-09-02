@@ -22,7 +22,7 @@
 
 AC_PREREQ(2.57)
 AC_INIT([xf86-input-usbtablet],
-        [1.1.0],
+        [1.2.0],
         [http://www.openbsd.org/],
         [xf86-input-usbtablet])
 
